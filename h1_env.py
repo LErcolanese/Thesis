@@ -9,11 +9,11 @@ import math
 import torch
 
 import omni.isaac.core.utils.torch as torch_utils
-from omni.isaac.lab_assets import H1_CFG_PD
+from prisma_h1.assets.unitree import H1_CFG_PD
 
 import omni.isaac.lab.sim as sim_utils
 from omni.isaac.lab.assets import Articulation, ArticulationCfg
-from omni.isaac.lab.envs import DirectRLEnvCfg
+from omni.isaac.lab.envs import DirectRLEnvCfg, DirectRLEnv
 from omni.isaac.lab.scene import InteractiveSceneCfg
 from omni.isaac.lab.sim import SimulationCfg
 from omni.isaac.lab.sensors import ContactSensorCfg
@@ -26,19 +26,22 @@ from omni.isaac.core.utils.torch.rotations import compute_heading_and_up, comput
 
 from omni.isaac.lab_tasks.direct.locomotion.locomotion_env import LocomotionEnv
 
+def normalize_angle(x):
+    return torch.atan2(torch.sin(x), torch.cos(x))
+
 
 @configclass
 class H1EnvCfg(DirectRLEnvCfg):
     # env
     episode_length_s = 15.0
-    decimation = 2
+    decimation = 4
     action_scale = 1.0
-    num_actions = 21
-    num_observations = 56
+    num_actions = 19
+    num_observations = 50
     num_states = 0
 
     # simulation
-    sim: SimulationCfg = SimulationCfg(dt=1 / 100, substeps=decimation)
+    sim: SimulationCfg = SimulationCfg(dt=1 / 100)
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",
         terrain_type="plane",
@@ -52,55 +55,36 @@ class H1EnvCfg(DirectRLEnvCfg):
         ),
         debug_vis=False,
     )
+    contact=ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/.*",
+        update_period=0.0, 
+        history_length=6, 
+        debug_vis=True
+    )
 
     # scene
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=4096, env_spacing=4.0, replicate_physics=True)
 
     # robot
     robot_cfg: ArticulationCfg = H1_CFG_PD.replace(prim_path="/World/envs/env_.*/Robot")
-    joint_gears: list = [
-        50.0,  # left_hip_yaw
-        50.0,  # right_hip_yaw
-        50.0,  # torso
-        50.0,  # left_hip_roll
-        50.0,  # right_hip_roll
-        50.0,  # left_shoulder_pitch
-        50.0,  # right_shoulder_pitch
-        50.0,  # left_hip_pitch
-        50.0,  # right_hip_pitch
-        50.0,  # left_shoulder_roll
-        50.0,  # right_shoulder_roll
-        50.0,  # left_knee
-        50.0,  # right_knee
-        50.0,  # left_shoulder_yaw
-        50.0,  # right_shoulder_yaw
-        50.0,  # left_ankle
-        50.0,  # right_ankle
-        50.0,  # left_elbow
-        50.0,  # right_elbow
-    ]
+
 
     heading_weight: float = 0.1
     up_weight: float = 0.4
 
-    energy_cost_scale: float = 0.05
     actions_cost_scale: float = 0.01
     alive_reward_scale: float = 2.0
-    dof_vel_scale: float = 0.1
 
     death_cost: float = -1.0
     termination_height: float = 0.8
 
-    angvel_penalty_scale:float = 0.05
+    angvel_penalty_scale:float = 0.2
     zm_point_dist_scale: float = 0.25
-    capture_point_dist_scale: float = 0.25
+    capture_point_dist_scale: float = 0.1
     contact_force_scale: float = 0.01
 
-    #quelle che ho aggiunto io
-    robot_dof_speed_scales: float = 0.1
 
-
-class H1Env(DirectRLEnvCfg):
+class H1Env(DirectRLEnv):
     cfg: H1EnvCfg
 
     def __init__(self, cfg: H1EnvCfg, render_mode: str | None = None, **kwargs):
@@ -115,16 +99,14 @@ class H1Env(DirectRLEnvCfg):
         self.robot_dof_upper_limits = self._robot.data.soft_joint_pos_limits[0, :, 1].to(device=self.device)
 
         self.robot_dof_speed_scales = torch.ones_like(self.robot_dof_lower_limits)
-        self.torso_index=self._robot.find_bodies("torso")[0][0]
-        self.left_foot_index=self._robot.find_bodies("left_ankle")[0][0]
-        self.right_foot_index=self._robot.find_bodies("right_ankle")[0][0]
-        self.mass=(self._robot.data.default_mass).sum(dim=-1)
-        self.inertia=self._robot.data.default_inertia[:,self.torso_index]
-        # self.robot_dof_speed_scales[self._robot.find_joints("legs")] = self.cfg.robot_dof_speed_scales
-        # self.robot_dof_speed_scales[self._robot.find_joints("feet")] = self.cfg.robot_dof_speed_scales
-        # self.robot_dof_speed_scales[self._robot.find_joints("arms")] = self.cfg.robot_dof_speed_scales
+        self.torso_index=self._robot.find_bodies("torso_link")[0][0]
+        self.left_foot_index=self._robot.find_bodies("left_ankle_link")[0][0]
+        self.right_foot_index=self._robot.find_bodies("right_ankle_link")[0][0]
+        # self.mass=(self._robot.data.default_mass).sum(dim=-1)
+        # self.inertia=self._robot.data.default_inertia[:,self.torso_index]
 
-        self.targets = torch.tensor([0, 0, 0], dtype=torch.float32, device=self.sim.device).repeat(
+
+        self.targets = torch.tensor([1000, 0, 0], dtype=torch.float32, device=self.sim.device).repeat(
             (self.num_envs, 1)
         )
         self.targets += self.scene.env_origins
@@ -133,7 +115,25 @@ class H1Env(DirectRLEnvCfg):
         self.joint_pos = self._robot.data.joint_pos
         self.joint_vel = self._robot.data.joint_vel
 
+        self.joint_pos_targets = torch.zeros_like(self.joint_pos)
+
         self.S=torch.tensor([[0,-1],[1,0]]).repeat(self.num_envs,1,1)
+
+        self.action_scale = self.cfg.action_scale
+
+        self._joint_dof_idx, _ = self._robot.find_joints(".*")
+
+        self.potentials = torch.zeros(self.num_envs, dtype=torch.float32, device=self.sim.device)
+        self.prev_potentials = torch.zeros_like(self.potentials)
+
+        self.start_rotation = torch.tensor([1, 0, 0, 0], device=self.sim.device, dtype=torch.float32)
+        self.up_vec = torch.tensor([0, 0, 1], dtype=torch.float32, device=self.sim.device).repeat((self.num_envs, 1))
+        self.heading_vec = torch.tensor([1, 0, 0], dtype=torch.float32, device=self.sim.device).repeat(
+            (self.num_envs, 1)
+        )
+        self.inv_start_rot = quat_conjugate(self.start_rotation).repeat((self.num_envs, 1))
+        self.basis_vec0 = self.heading_vec.clone()
+        self.basis_vec1 = self.up_vec.clone()
 
     def _setup_scene(self):
         self._robot= Articulation(self.cfg.robot_cfg)
@@ -141,18 +141,11 @@ class H1Env(DirectRLEnvCfg):
         self.scene.articulations["robot"]=self._robot
 
 
-        #add contact sensors 
-        self.contact_forces= ContactSensorCfg(
-        prim_path="/World/envs/env_.*/Robot/.*",
-        update_period=0.0, 
-        history_length=6, 
-        debug_vis=True
-        )
-
-
         self.cfg.terrain.num_envs=self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
         self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
+
+        
 
         # clone, filter, and replicate
         self.scene.clone_environments(copy_from_source=False)
@@ -167,8 +160,8 @@ class H1Env(DirectRLEnvCfg):
 
     def _pre_physics_step(self, actions: torch.Tensor) -> None:
         self.actions = actions.clone()
-        joint_pos_targets=self.robot_dof_speed_scales * self.dt * self.actions * self.cfg.action_scale
-        self.joint_pos_targets[:]=torch.clamp(joint_pos_targets, self.robot_dof_lower_limits, self.robot_dof_upper_limits)
+        self.joint_pos_targets=self.robot_dof_speed_scales * self.dt * self.actions * self.cfg.action_scale
+        self.joint_pos_targets[:]=torch.clamp(self.joint_pos_targets, self.robot_dof_lower_limits, self.robot_dof_upper_limits)
         # targets = self.targets + self.robot_dof_speed_scales * self.dt * self.actions * self.cfg.action_scale
         # self.targets[:] = torch.clamp(targets, self.robot_dof_lower_limits, self.robot_dof_upper_limits)
 
@@ -201,7 +194,7 @@ class H1Env(DirectRLEnvCfg):
         # robot_left_finger_pos = self._robot.data.body_pos_w[:, self.left_finger_link_idx]
         # robot_right_finger_pos = self._robot.data.body_pos_w[:, self.right_finger_link_idx]
 
-        return self._compute_rewards(
+        return compute_rewards(
             self.actions,
             self.reset_terminated,
             self.cfg.up_weight,
@@ -220,8 +213,8 @@ class H1Env(DirectRLEnvCfg):
             self.torso_lin_vel,
             self.right_foot_pos,
             self.left_foot_pos,
-            self.cfg.zm_point_dist_scale,
-            self.zm_point,
+            # self.cfg.zm_point_dist_scale,
+            # self.zm_point,
             self.cfg.capture_point_dist_scale,
             self._robot.data.default_root_state[:,:3]
    
@@ -245,7 +238,6 @@ class H1Env(DirectRLEnvCfg):
 
         #to target = errore rispetto a target position
         to_target = self.targets[env_ids] - default_root_state[:, :3]
-        to_target[:, 2] = 0.0
         self.potentials[env_ids] = -torch.norm(to_target, p=2, dim=-1) / self.cfg.sim.dt
 
         self._compute_intermediate_values()
@@ -261,7 +253,7 @@ class H1Env(DirectRLEnvCfg):
             self.torso_rotation,
             self.torso_lin_vel,
             self.torso_ang_vel,
-            self.contact_forces.data.net_forces_w
+            # self.scene["self.contact_forces"].data.net_forces_w
             ), dim=-1
         )
         observations = {"policy": obs}
@@ -274,20 +266,20 @@ class H1Env(DirectRLEnvCfg):
         self.torso_lin_vel, self.torso_ang_vel = self._robot.data.root_lin_vel_w, self._robot.data.root_ang_vel_w
         self.joint_pos, self.joint_vel = self._robot.data.joint_pos, self._robot.data.joint_vel
 
-        self.torso_lin_acc=self.robot.data.body_lin_acc_w[:,self.torso_index]
-        self.right_foot_pos=self.robot.data.body_pos_w[:,self.right_foot_index]
-        self.left_foot_pos=self.robot.data.body_pos_w[:,self.left_foot_index]
+        self.torso_lin_acc=self._robot.data.body_lin_acc_w[:,self.torso_index]
+        self.right_foot_pos=self._robot.data.body_pos_w[:,self.right_foot_index]
+        self.left_foot_pos=self._robot.data.body_pos_w[:,self.left_foot_index]
 
         
         self.projected_gravity=self._robot.data.projected_gravity_b
 
-        self.ang_momentum=self.inertia.view(self.num_envs,3,3)*self.torso_ang_vel
-        self.ang_momentum_variation=(self.ang_momentum-self.ang_momentum_old)/self.dt
+        # self.ang_momentum=self.inertia.view(self.num_envs,3,3)*self.torso_ang_vel
+        # self.ang_momentum_variation=(self.ang_momentum-self.ang_momentum_old)/self.dt
 
-        self.zm_point=(self.torso_position+self.torso_position[:,2]/(self.torso_lin_acc[:,2]
-            +self.projected_gravity[:,2]) *(self.torso_lin_acc[:,:2]+self.projected_gravity[:,:2])+1
-            /(self.mass*(self.torso_lin_acc[:,2]+self.projected_gravity[:,2]))*self.S*self.ang_momentum_variation[:,:2]
-        )
+        # self.zm_point=(self.torso_position+self.torso_position[:,2]/(self.torso_lin_acc[:,2]
+        #     +self.projected_gravity[:,2]) *(self.torso_lin_acc[:,:2]+self.projected_gravity[:,:2])+1
+        #     /(self.mass*(self.torso_lin_acc[:,2]+self.projected_gravity[:,2]))*self.S*self.ang_momentum_variation[:,:2]
+        # )
         
         (
             self.up_proj,
@@ -341,7 +333,6 @@ def compute_intermediate_values(
 ):
     #errore tra posizione attuale e desiderata del com
     to_target = targets - torso_position
-    to_target[:, 2] = 0.0
 
     torso_quat, up_proj, heading_proj, up_vec, heading_vec = compute_heading_and_up(
         torso_rotation, inv_start_rot, to_target, basis_vec0, basis_vec1, 2
@@ -353,8 +344,6 @@ def compute_intermediate_values(
 
     dof_pos_scaled = torch_utils.maths.unscale(dof_pos, dof_lower_limits, dof_upper_limits)
 
-    to_target = targets - torso_position
-    to_target[:, 2] = 0.0
     prev_potentials[:] = potentials
     potentials = -torch.norm(to_target, p=2, dim=-1) / dt
 
@@ -394,8 +383,8 @@ def compute_rewards(
     torso_lin_vel:torch.Tensor,
     right_foot_pos:torch.Tensor,
     left_foot_pos:torch.Tensor,
-    zm_point_dist_scale: float,
-    zm_point: torch.Tensor,
+    # zm_point_dist_scale: float,
+    # zm_point: torch.Tensor,
     capture_point_dist_scale: float,
     default_root_pos:torch.Tensor
 ):
@@ -425,8 +414,8 @@ def compute_rewards(
     #richiamare funzioni per calcolare capture point actual e reference
 
    
-    zm_point_target=default_root_pos[:,:2]
-    zm_point_dist = zm_point_dist_scale * torch.norm(zm_point-zm_point_target, p=2, dim=-1)
+    # zm_point_target=default_root_pos[:,:2]
+    # zm_point_dist = zm_point_dist_scale * torch.norm(zm_point-zm_point_target, p=2, dim=-1)
     
     #zero moment point target è al centro del segmento che unisce la proiezione verticale dei due piedi
     #richiamare funzione che calcola posizione del zmp
@@ -456,7 +445,7 @@ def compute_rewards(
         - actions_cost_scale * actions_cost
         - dof_at_limit_cost
         - capture_point_dist
-        - zm_point_dist
+        # - zm_point_dist
         - ang_vel_penalty
     )
     # adjust reward for fallen agents
