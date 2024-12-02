@@ -1,0 +1,23 @@
+Metadata-Version: 2.1
+Name: lab-task
+Version: 0.0.0
+Summary: UNKNOWN
+Home-page: UNKNOWN
+Author: tizi a caso
+Maintainer: Si mantiene in piedi
+Maintainer-email: mittalma@ethz.ch
+License: UNKNOWN
+Platform: UNKNOWN
+Classifier: Natural Language :: English
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Isaac Sim :: 2023.1.0-hotfix.1
+Requires-Python: >=3.7
+Provides-Extra: sb3
+Provides-Extra: skrl
+Provides-Extra: rl_games
+Provides-Extra: rsl_rl
+Provides-Extra: robomimic
+Provides-Extra: all
+
+UNKNOWN
+

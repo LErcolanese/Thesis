@@ -1,0 +1,7 @@
+setup.py
+lab_task.egg-info/PKG-INFO
+lab_task.egg-info/SOURCES.txt
+lab_task.egg-info/dependency_links.txt
+lab_task.egg-info/not-zip-safe
+lab_task.egg-info/requires.txt
+lab_task.egg-info/top_level.txt
