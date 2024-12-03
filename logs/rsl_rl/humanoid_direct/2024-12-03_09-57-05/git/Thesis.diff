@@ -1,0 +1,21 @@
+--- git status ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	logs/rsl_rl/humanoid_direct/2024-12-03_09-45-43/
+	logs/rsl_rl/humanoid_direct/2024-12-03_09-49-29/
+	logs/rsl_rl/humanoid_direct/2024-12-03_09-50-07/
+	logs/rsl_rl/humanoid_direct/2024-12-03_09-51-34/
+	logs/rsl_rl/humanoid_direct/2024-12-03_09-52-52/
+	logs/rsl_rl/humanoid_direct/2024-12-03_09-53-48/
+	logs/rsl_rl/humanoid_direct/2024-12-03_09-54-32/
+	logs/rsl_rl/humanoid_direct/2024-12-03_09-55-03/
+	logs/rsl_rl/humanoid_direct/2024-12-03_09-55-46/
+	logs/rsl_rl/humanoid_direct/2024-12-03_09-57-05/
+
+nothing added to commit but untracked files present (use "git add" to track) 
+
+
+--- git diff ---
